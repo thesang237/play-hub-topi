@@ -303,6 +303,43 @@ p {
   text-align: center;
 }
 
+/* Shown when the browser blocks autoplay (Chrome/Safari gesture requirement) */
+.syncOverlay {
+  display: grid;
+  grid-area: 1 / 1;
+  z-index: 4;
+  place-items: center;
+  gap: 10px;
+  background: rgba(10, 12, 11, 0.72);
+  backdrop-filter: blur(6px);
+  text-align: center;
+}
+
+.syncOverlay p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.syncButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(241, 200, 75, 0.6);
+  padding: 0 22px;
+  min-height: 48px;
+  background: rgba(241, 200, 75, 0.14);
+  color: var(--accent);
+  font-size: 1rem;
+  font-weight: 800;
+  transition: background 0.15s;
+}
+
+.syncButton:hover {
+  background: rgba(241, 200, 75, 0.28);
+}
+
+
 .playerMeta {
   display: flex;
   align-items: center;

@@ -114,6 +114,22 @@ function App() {
   const [socket, setSocket] = React.useState<WebSocket | null>(null);
   const [connection, setConnection] = React.useState<"idle" | "connecting" | "online" | "offline">("idle");
   const [connectionIssue, setConnectionIssue] = React.useState("");
+  // Incremented when Safari restores this page from bfcache so the WebSocket
+  // effect re-runs and gets a fresh connection.
+  const [reconnectKey, setReconnectKey] = React.useState(0);
+
+  React.useEffect(() => {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      // event.persisted === true means Safari restored the page from bfcache
+      // instead of doing a full load. React effects won't re-run on their own,
+      // so we bump reconnectKey to force the WebSocket effect below to fire.
+      if (event.persisted) {
+        setReconnectKey((k) => k + 1);
+      }
+    };
+    window.addEventListener("pageshow", handlePageShow);
+    return () => window.removeEventListener("pageshow", handlePageShow);
+  }, []);
 
   React.useEffect(() => {
     if (!roomId || !member) return;
@@ -144,7 +160,9 @@ function App() {
     setSocket(ws);
 
     return () => ws.close();
-  }, [roomId, member]);
+    // reconnectKey is intentionally included so that a bfcache restore
+    // (pageshow with persisted=true) creates a fresh WebSocket.
+  }, [roomId, member, reconnectKey]);
 
   const createRoom = () => {
     const nextRoomId = makeRoomId();
@@ -364,11 +382,16 @@ function PlayerCard({
   const desiredStatusRef = React.useRef<PlaybackState["status"]>(playback?.status ?? "paused");
   const lastAppliedRef = React.useRef("");
   const currentVideoRef = React.useRef("");
+  // True once the user has clicked Play, Pause, or "Sync & Play".
+  // Chrome and Safari require a user gesture before any programmatic playback.
+  const hasInteractedRef = React.useRef(false);
   const [apiReady, setApiReady] = React.useState(() => Boolean(window.YT?.Player));
   const [playerReady, setPlayerReady] = React.useState(false);
   const [durationSeconds, setDurationSeconds] = React.useState(0);
   const [progressSeconds, setProgressSeconds] = React.useState(0);
   const [isSeeking, setIsSeeking] = React.useState(false);
+  // True when the room is playing but we can't autoplay without a user tap.
+  const [needsUserGesture, setNeedsUserGesture] = React.useState(false);
 
   React.useEffect(() => {
     playbackRef.current = playback;
@@ -444,7 +467,10 @@ function PlayerCard({
             window.setTimeout(() => player.pauseVideo(), 0);
           }
 
-          if (event.data === window.YT.PlayerState.PAUSED && desiredStatus !== "paused") {
+          // Only try to resume if the user has already interacted.
+          // Without a prior gesture, playVideo() is silently blocked by the
+          // browser autoplay policy and this would loop forever.
+          if (event.data === window.YT.PlayerState.PAUSED && desiredStatus !== "paused" && hasInteractedRef.current) {
             window.setTimeout(() => player.playVideo(), 0);
           }
         }
@@ -478,9 +504,11 @@ function PlayerCard({
 
     if (currentVideoRef.current !== playback.videoId) {
       currentVideoRef.current = playback.videoId;
-      if (playback.status === "playing") {
+      if (playback.status === "playing" && hasInteractedRef.current) {
+        // loadVideoById auto-plays — only safe after a user gesture.
         player.loadVideoById(playback.videoId, targetSeconds);
       } else {
+        // cueVideoById loads without playing, works without a gesture.
         player.cueVideoById(playback.videoId, targetSeconds);
       }
     } else {
@@ -491,10 +519,17 @@ function PlayerCard({
     }
 
     if (playback.status === "playing") {
-      player.playVideo();
+      if (hasInteractedRef.current) {
+        player.playVideo();
+        setNeedsUserGesture(false);
+      } else {
+        // Show the Sync overlay so the user can tap to unblock autoplay.
+        setNeedsUserGesture(true);
+      }
     } else {
       player.seekTo(targetSeconds, true);
       player.pauseVideo();
+      setNeedsUserGesture(false);
     }
   }, [playerReady, playback]);
 
@@ -550,6 +585,8 @@ function PlayerCard({
 
   const play = () => {
     if (!hasValidVideoId) return;
+    hasInteractedRef.current = true;
+    setNeedsUserGesture(false);
     desiredStatusRef.current = "playing";
     if (playerReady && playerRef.current) {
       if (currentVideoRef.current !== videoId) {
@@ -563,12 +600,34 @@ function PlayerCard({
   };
   const pause = () => {
     if (!hasValidVideoId) return;
+    hasInteractedRef.current = true;
     desiredStatusRef.current = "paused";
     const seconds = position();
     if (playerReady && playerRef.current) {
       playerRef.current.pauseVideo();
     }
     onSend({ type: "player:update", videoId, status: "paused", positionSeconds: seconds, playbackRate });
+  };
+  // Called when the user taps the "Sync & Play" overlay. This constitutes a
+  // user gesture, which satisfies browser autoplay policies on Chrome/Safari.
+  const syncAndPlay = () => {
+    if (!playerRef.current || !playbackRef.current) return;
+    hasInteractedRef.current = true;
+    setNeedsUserGesture(false);
+    desiredStatusRef.current = "playing";
+    const pb = playbackRef.current;
+    const pbRate = pb.playbackRate ?? 1;
+    const elapsed = pb.status === "playing" ? ((Date.now() - pb.updatedAt) / 1000) * pbRate : 0;
+    const targetSeconds = Math.max(0, pb.positionSeconds + elapsed);
+    const player = playerRef.current;
+    player.setPlaybackRate(pbRate);
+    if (currentVideoRef.current !== pb.videoId) {
+      currentVideoRef.current = pb.videoId;
+      player.loadVideoById(pb.videoId, targetSeconds);
+    } else {
+      player.seekTo(targetSeconds, true);
+      player.playVideo();
+    }
   };
   const seek = (seconds: number) => {
     if (!hasValidVideoId) return;
@@ -591,6 +650,15 @@ function PlayerCard({
         <div id="youtube-player" className={hasValidVideoId ? "" : "playerHostEmpty"} />
         {hasValidVideoId ? <div className="playerClickShield" aria-hidden="true" /> : null}
         {!hasValidVideoId ? <EmptyPlayer /> : null}
+        {needsUserGesture && hasValidVideoId ? (
+          <div className="syncOverlay">
+            <button className="syncButton" onClick={syncAndPlay}>
+              <Play size={20} />
+              Sync &amp; Play
+            </button>
+            <p>Audio is playing in this room</p>
+          </div>
+        ) : null}
       </div>
       <div className="playerMeta">
         <div>
