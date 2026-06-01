@@ -521,6 +521,33 @@ function PlayerCard({
     }
   }, []);
 
+  // Pause the YouTube player when the tab is closed or hidden.
+  // Safari fires `pagehide` reliably on tab close; `visibilitychange` covers
+  // tab-switch / background scenarios across all browsers.
+  React.useEffect(() => {
+    const handlePause = () => {
+      try {
+        playerRef.current?.pauseVideo();
+      } catch {
+        // Player may already be destroyed.
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        handlePause();
+      }
+    };
+
+    window.addEventListener("pagehide", handlePause);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("pagehide", handlePause);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
+
   const play = () => {
     if (!hasValidVideoId) return;
     desiredStatusRef.current = "playing";
