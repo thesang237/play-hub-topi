@@ -169,7 +169,14 @@ wss.on("connection", (socket) => {
       if (!room.playback.videoId) {
         room.playback = playbackFor(item.videoId, "paused", 0, actor.nickname, room.playback.playbackRate);
       }
-      addActivity(room, `added "${item.title}"`, actor);
+      addActivity(room, `added "${item.title}"`, actor, {
+        video: {
+          videoId: item.videoId,
+          title: item.title,
+          channelTitle: item.channelTitle,
+          thumbnail: item.thumbnail
+        }
+      });
       broadcastRoom(roomId);
     }
 
@@ -211,16 +218,7 @@ wss.on("connection", (socket) => {
 
     if (message.type === "queue:ended") {
       const currentIndex = room.queue.findIndex((item) => item.videoId === room.playback.videoId);
-      const current = room.queue[currentIndex];
-      let next = null;
-
-      if (room.repeatMode === "one") {
-        next = current;
-      } else if (currentIndex >= 0 && currentIndex < room.queue.length - 1) {
-        next = room.queue[currentIndex + 1];
-      } else if (room.repeatMode === "playlist") {
-        next = room.queue[0];
-      }
+      const next = room.queue[currentIndex + 1] || room.queue[0];
 
       room.playback = next
         ? playbackFor(next.videoId, "playing", 0, actor.nickname, room.playback.playbackRate)
@@ -257,16 +255,12 @@ wss.on("connection", (socket) => {
       broadcastRoom(roomId);
     }
 
-    if (message.type === "player:repeat") {
-      room.repeatMode = nextRepeatMode(room.repeatMode);
-      addActivity(room, `changed repeat to ${formatRepeatMode(room.repeatMode)}`, actor);
-      broadcastRoom(roomId);
-    }
-
     if (message.type === "chat:send") {
       const text = String(message.text || "").trim().slice(0, 500);
       if (!text) return;
+      console.log(`[chat:send] ${actor.nickname}: "${text}" → room ${roomId} (${room.activity.length} items before)`);
       addChat(room, actor, text);
+      console.log(`[chat:send] activity now has ${room.activity.length} items, first kind=${room.activity[0]?.kind}`);
       broadcastRoom(roomId);
     }
   });
@@ -312,8 +306,7 @@ function getRoom(roomId) {
       members: new Map(),
       queue: [],
       activity: [],
-      playback: playbackFor("", "paused", 0, "system"),
-      repeatMode: "off"
+      playback: playbackFor("", "paused", 0, "system")
     });
   }
   return rooms.get(roomId);
@@ -330,8 +323,7 @@ function broadcastRoom(roomId) {
       members: [...room.members.values()],
       queue: room.queue,
       activity: room.activity,
-      playback: room.playback,
-      repeatMode: room.repeatMode
+      playback: room.playback
     }
   });
 
@@ -342,12 +334,13 @@ function broadcastRoom(roomId) {
   }
 }
 
-function addActivity(room, message, actor) {
+function addActivity(room, message, actor, metadata = {}) {
   room.activity.unshift({
     id: crypto.randomUUID(),
     kind: "activity",
     actor: actor ? { id: actor.id, nickname: actor.nickname } : undefined,
     message: actor ? `${actor.nickname} ${message}` : message,
+    ...metadata,
     createdAt: Date.now()
   });
   room.activity = room.activity.slice(0, 80);
@@ -383,18 +376,6 @@ function parseYouTubeId(input) {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
-}
-
-function nextRepeatMode(current) {
-  if (current === "off") return "playlist";
-  if (current === "playlist") return "one";
-  return "off";
-}
-
-function formatRepeatMode(mode) {
-  if (mode === "playlist") return "repeat playlist";
-  if (mode === "one") return "repeat one";
-  return "no repeat";
 }
 
 function formatDuration(totalSeconds) {

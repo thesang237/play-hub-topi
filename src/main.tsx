@@ -12,8 +12,6 @@ import {
   Pause,
   Play,
   Plus,
-  Repeat,
-  Repeat1,
   Search,
   Send,
   Share2,
@@ -59,10 +57,10 @@ type ActivityItem = {
     nickname: string;
   };
   text?: string;
+  video?: VideoSearchResult;
 };
 
 type QueueTab = "queue" | "history";
-type RepeatMode = "off" | "playlist" | "one";
 
 type PlaybackState = {
   videoId: string;
@@ -79,7 +77,6 @@ type RoomState = {
   queue: QueueItem[];
   activity: ActivityItem[];
   playback: PlaybackState;
-  repeatMode: RepeatMode;
 };
 
 type PlayerApi = {
@@ -170,6 +167,10 @@ function App() {
     ws.addEventListener("message", (event) => {
       const message = JSON.parse(event.data);
       if (message.type === "room:state") {
+        const chatCount = (message.state.activity || []).filter((a: { kind?: string }) => a.kind === "chat").length;
+        if (chatCount > 0) {
+          console.log(`[room:state] ${message.state.activity.length} activity items, ${chatCount} chats`);
+        }
         setRoomState(message.state);
       }
     });
@@ -321,7 +322,6 @@ function Room({
   const playFromQueueRef = React.useRef<((videoId: string) => void) | null>(null);
   const queue = roomState?.queue ?? [];
   const playback = roomState?.playback;
-  const repeatMode = roomState?.repeatMode ?? "off";
   const nowPlaying = queue.find((item) => item.videoId === playback?.videoId) ?? queue[0];
 
   const send = React.useCallback(
@@ -392,7 +392,6 @@ function Room({
           nowPlaying={nowPlaying}
           onRegisterQueuePlay={registerQueuePlay}
           onSend={send}
-          repeatMode={repeatMode}
         />
         <aside className="sideRail">
           <Members members={roomState?.members ?? [member]} />
@@ -427,14 +426,12 @@ function PlayerCard({
   playback,
   nowPlaying,
   onRegisterQueuePlay,
-  onSend,
-  repeatMode
+  onSend
 }: {
   playback?: PlaybackState;
   nowPlaying?: QueueItem;
   onRegisterQueuePlay: (handler: ((videoId: string) => void) | null) => void;
   onSend: (message: Record<string, unknown>) => void;
-  repeatMode: RepeatMode;
 }) {
   const playerRef = React.useRef<PlayerApi | null>(null);
   const playbackRef = React.useRef<PlaybackState | undefined>(playback);
@@ -800,7 +797,6 @@ function PlayerCard({
           isSeeking={isSeeking}
           onChangeSpeed={changeSpeed}
           onChangeVolume={changeVolume}
-          onCycleRepeat={() => onSend({ type: "player:repeat" })}
           onPause={pause}
           onPlay={play}
           onProgressInput={(seconds) => {
@@ -815,7 +811,6 @@ function PlayerCard({
           playbackRate={playbackRate}
           playerReady={playerReady}
           progressSeconds={progressSeconds}
-          repeatMode={repeatMode}
           volume={volume}
           videoId={hasValidVideoId ? videoId : ""}
         />
@@ -837,7 +832,6 @@ function PlayerControls({
   durationSeconds,
   onChangeSpeed,
   onChangeVolume,
-  onCycleRepeat,
   onPause,
   onPlay,
   onProgressInput,
@@ -849,7 +843,6 @@ function PlayerControls({
   playbackRate,
   playerReady,
   progressSeconds,
-  repeatMode,
   volume,
   videoId
 }: {
@@ -857,7 +850,6 @@ function PlayerControls({
   isSeeking: boolean;
   onChangeSpeed: (rate: number) => void;
   onChangeVolume: (volume: number) => void;
-  onCycleRepeat: () => void;
   onPause: () => void;
   onPlay: () => void;
   onProgressInput: (seconds: number) => void;
@@ -869,7 +861,6 @@ function PlayerControls({
   playbackRate: number;
   playerReady: boolean;
   progressSeconds: number;
-  repeatMode: RepeatMode;
   volume: number;
   videoId: string;
 }) {
@@ -912,9 +903,10 @@ function PlayerControls({
           <button className="iconButton" disabled={disabled} title={`Volume ${volume}%`}>
             <VolumeIcon size={18} />
           </button>
-          <div className="volumePopover">
+          <div className="volumePopover" style={{ "--volume-level": `${volume}%` } as React.CSSProperties}>
             <input
               aria-label="Volume"
+              className="volumeSlider"
               disabled={disabled}
               max={100}
               min={0}
@@ -927,14 +919,6 @@ function PlayerControls({
             <span>{volume}%</span>
           </div>
         </div>
-        <button
-          className={`iconButton ${repeatMode !== "off" ? "active" : ""}`}
-          disabled={!videoId}
-          onClick={onCycleRepeat}
-          title={repeatMode === "one" ? "Repeat one" : repeatMode === "playlist" ? "Repeat playlist" : "No repeat"}
-        >
-          {repeatMode === "one" ? <Repeat1 size={18} /> : <Repeat size={18} />}
-        </button>
         <label className="speedControl">
           <span>Speed</span>
           <select
@@ -1041,7 +1025,7 @@ function QueuePanel({
   onSend: (message: Record<string, unknown>) => void;
 }) {
   const [activeTab, setActiveTab] = React.useState<QueueTab>("queue");
-  const history = activity.filter((item) => item.kind !== "chat" && !isLeaveActivity(item));
+  const history = activity.filter(isAddedVideoActivity).slice().reverse();
 
   return (
     <section className="panel queuePanel">
@@ -1105,7 +1089,9 @@ function QueuePanel({
           {history.length === 0 ? (
             <p className="emptyText">No queue history yet.</p>
           ) : (
-            history.map((item) => <ActivityLine item={item} key={item.id} />)
+            history.map((item) => (
+              <AddedHistoryItem item={item} key={item.id} queue={queue} onAdd={(video) => onSend({ type: "queue:add", item: video })} />
+            ))
           )}
         </div>
       )}
@@ -1141,7 +1127,18 @@ function ActivityLog({
   onSend: (message: Record<string, unknown>) => void;
 }) {
   const [message, setMessage] = React.useState("");
-  const visibleActivity = activity.filter((item) => !isLeaveActivity(item));
+  const activityListRef = React.useRef<HTMLDivElement | null>(null);
+  const visibleActivity = React.useMemo(
+    () => activity.filter((item) => !isLeaveActivity(item)).slice().reverse(),
+    [activity]
+  );
+
+  React.useEffect(() => {
+    const list = activityListRef.current;
+    if (!list) return;
+    list.scrollTop = list.scrollHeight;
+  }, [visibleActivity.length]);
+
   const sendChat = (event: React.FormEvent) => {
     event.preventDefault();
     const text = message.trim();
@@ -1156,7 +1153,7 @@ function ActivityLog({
         <Activity size={18} />
         Activity
       </div>
-      <div className="activityList">
+      <div className="activityList" ref={activityListRef}>
         {visibleActivity.length === 0 ? (
           <p className="emptyText">Room actions will appear here.</p>
         ) : (
@@ -1177,6 +1174,37 @@ function ActivityLog({
         </button>
       </form>
     </section>
+  );
+}
+
+function AddedHistoryItem({
+  item,
+  queue,
+  onAdd
+}: {
+  item: ActivityItem;
+  queue: QueueItem[];
+  onAdd: (video: VideoSearchResult) => void;
+}) {
+  const actor = item.actor?.nickname || getActivityActor(item.message);
+  const video = getHistoryVideo(item, queue);
+  const title = video?.title || getAddedVideoTitle(item.message);
+
+  return (
+    <article className="historyItem">
+      {video?.thumbnail ? <img alt="" src={video.thumbnail} /> : <div className="historyThumbFallback"><Youtube size={18} /></div>}
+      <div className="historyText">
+        <h3>{decodeHtml(title || "Added video")}</h3>
+        <p>
+          <span>{formatTime(item.createdAt)}</span>
+          {actor ? `Added by ${actor}` : "Added to queue"}
+        </p>
+        {video?.channelTitle ? <p>{decodeHtml(video.channelTitle)}</p> : null}
+      </div>
+      <button className="miniButton historyAddButton" disabled={!video} onClick={() => video && onAdd(video)} title="Add to queue">
+        <Plus size={15} />
+      </button>
+    </article>
   );
 }
 
@@ -1226,7 +1254,22 @@ function formatDuration(totalSeconds: number) {
 }
 
 function isLeaveActivity(item: ActivityItem) {
-  return /\bleft the room\b/i.test(item.message);
+  return item.kind !== "chat" && /\bleft the room\b/i.test(item.message);
+}
+
+function isAddedVideoActivity(item: ActivityItem) {
+  return item.kind !== "chat" && /\badded\s+"/i.test(item.message);
+}
+
+function getAddedVideoTitle(message: string) {
+  return message.match(/\badded\s+"(.+)"$/i)?.[1] ?? "";
+}
+
+function getHistoryVideo(item: ActivityItem, queue: QueueItem[]): VideoSearchResult | undefined {
+  if (item.video) return item.video;
+  const title = getAddedVideoTitle(item.message);
+  if (!title) return undefined;
+  return queue.find((video) => decodeHtml(video.title) === decodeHtml(title));
 }
 
 function getActivityActor(message: string) {
