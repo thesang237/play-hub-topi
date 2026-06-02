@@ -4,12 +4,14 @@ import {
   Activity,
   ArrowDown,
   ArrowUp,
+  Check,
   Clipboard,
   Headphones,
   ListMusic,
   LogIn,
   MessageCircle,
   Pause,
+  Pencil,
   Play,
   Plus,
   Search,
@@ -62,6 +64,11 @@ type ActivityItem = {
 
 type QueueTab = "queue" | "history";
 
+type PlayerAudioPreference = {
+  volume: number;
+  muted: boolean;
+};
+
 type PlaybackState = {
   videoId: string;
   status: "playing" | "paused";
@@ -73,6 +80,7 @@ type PlaybackState = {
 
 type RoomState = {
   id: string;
+  name: string;
   members: Member[];
   queue: QueueItem[];
   activity: ActivityItem[];
@@ -121,6 +129,7 @@ declare global {
 }
 
 const memberKey = "play-hub-member";
+const playerAudioKey = "play-hub-player-audio";
 const speedOptions = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
 function App() {
@@ -167,10 +176,6 @@ function App() {
     ws.addEventListener("message", (event) => {
       const message = JSON.parse(event.data);
       if (message.type === "room:state") {
-        const chatCount = (message.state.activity || []).filter((a: { kind?: string }) => a.kind === "chat").length;
-        if (chatCount > 0) {
-          console.log(`[room:state] ${message.state.activity.length} activity items, ${chatCount} chats`);
-        }
         setRoomState(message.state);
       }
     });
@@ -301,6 +306,71 @@ function JoinRoom({
   );
 }
 
+function RoomTitle({
+  name,
+  roomId,
+  onRename
+}: {
+  name: string;
+  roomId: string;
+  onRename: (name: string) => void;
+}) {
+  const [editing, setEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState(name);
+  const inputRef = React.useRef<HTMLInputElement | null>(null);
+
+  React.useEffect(() => {
+    setDraft(name);
+  }, [name]);
+
+  React.useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editing]);
+
+  const submit = () => {
+    const trimmed = draft.trim().slice(0, 60);
+    setEditing(false);
+    if (trimmed !== name) {
+      onRename(trimmed);
+    }
+  };
+
+  if (editing) {
+    return (
+      <form
+        className="roomTitleForm"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
+      >
+        <input
+          ref={inputRef}
+          className="roomTitleInput"
+          maxLength={60}
+          placeholder={`Room ${roomId}`}
+          value={draft}
+          onBlur={submit}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+        <button className="miniButton" type="submit" title="Save name">
+          <Check size={15} />
+        </button>
+      </form>
+    );
+  }
+
+  return (
+    <h1 className="roomTitleDisplay" onClick={() => setEditing(true)} title="Click to rename">
+      {name || `Room ${roomId}`}
+      <Pencil size={14} className="roomTitlePencil" />
+    </h1>
+  );
+}
+
 function Room({
   connection,
   member,
@@ -369,7 +439,11 @@ function Room({
           </div>
           <div>
             <p className="eyebrow">Play Hub</p>
-            <h1>Room {roomId}</h1>
+            <RoomTitle
+              name={roomState?.name ?? ""}
+              roomId={roomId}
+              onRename={(name) => send({ type: "room:rename", name })}
+            />
           </div>
         </div>
         <div className="topActions">
@@ -446,8 +520,9 @@ function PlayerCard({
   const [durationSeconds, setDurationSeconds] = React.useState(0);
   const [progressSeconds, setProgressSeconds] = React.useState(0);
   const [isSeeking, setIsSeeking] = React.useState(false);
-  const [volume, setVolume] = React.useState(80);
-  const [muted, setMuted] = React.useState(false);
+  const [volume, setVolume] = React.useState(() => getStoredPlayerAudio().volume);
+  const [muted, setMuted] = React.useState(() => getStoredPlayerAudio().muted);
+  const localAudioRef = React.useRef<PlayerAudioPreference>({ volume, muted });
   // True when the room is playing but we can't autoplay without a user tap.
   const [needsUserGesture, setNeedsUserGesture] = React.useState(false);
 
@@ -455,6 +530,16 @@ function PlayerCard({
     playbackRef.current = playback;
     desiredStatusRef.current = playback?.status ?? "paused";
   }, [playback]);
+
+  React.useEffect(() => {
+    const preference = { volume, muted };
+    localAudioRef.current = preference;
+    storePlayerAudio(preference);
+
+    if (playerReady && playerRef.current) {
+      applyPlayerAudioPreference(playerRef.current, preference);
+    }
+  }, [muted, playerReady, volume]);
 
   React.useEffect(() => {
     if (!playerReady) return;
@@ -509,12 +594,7 @@ function PlayerCard({
       events: {
         onReady: (event) => {
           playerRef.current = event.target;
-          if (typeof event.target.getVolume === "function") {
-            setVolume(event.target.getVolume());
-          }
-          if (typeof event.target.isMuted === "function") {
-            setMuted(event.target.isMuted());
-          }
+          applyPlayerAudioPreference(event.target, localAudioRef.current);
           setPlayerReady(true);
         },
         onStateChange: (event) => {
@@ -564,6 +644,7 @@ function PlayerCard({
     const elapsed = playback.status === "playing" ? ((Date.now() - playback.updatedAt) / 1000) * playbackRate : 0;
     const targetSeconds = Math.max(0, playback.positionSeconds + elapsed);
     player.setPlaybackRate(playbackRate);
+    applyPlayerAudioPreference(player, localAudioRef.current);
     setProgressSeconds(targetSeconds);
 
     if (currentVideoRef.current !== playback.videoId) {
@@ -658,6 +739,7 @@ function PlayerCard({
         playerRef.current.loadVideoById(videoId, 0);
       }
       playerRef.current.setPlaybackRate(playbackRate);
+      applyPlayerAudioPreference(playerRef.current, localAudioRef.current);
       playerRef.current.playVideo();
     }
     onSend({ type: "player:update", videoId, status: "playing", positionSeconds: position(), playbackRate });
@@ -673,12 +755,7 @@ function PlayerCard({
         currentVideoRef.current = nextVideoId;
         playerRef.current.setPlaybackRate(playbackRate);
         playerRef.current.loadVideoById(nextVideoId, seconds);
-        if (muted) {
-          playerRef.current.mute();
-        } else {
-          playerRef.current.unMute();
-        }
-        playerRef.current.setVolume(volume);
+        applyPlayerAudioPreference(playerRef.current, localAudioRef.current);
         playerRef.current.playVideo();
       }
       onSend({
@@ -689,7 +766,7 @@ function PlayerCard({
         playbackRate
       });
     },
-    [muted, onSend, playbackRate, playerReady, volume]
+    [onSend, playbackRate, playerReady]
   );
 
   React.useEffect(() => {
@@ -720,6 +797,7 @@ function PlayerCard({
     const targetSeconds = Math.max(0, pb.positionSeconds + elapsed);
     const player = playerRef.current;
     player.setPlaybackRate(pbRate);
+    applyPlayerAudioPreference(player, localAudioRef.current);
     if (currentVideoRef.current !== pb.videoId) {
       currentVideoRef.current = pb.videoId;
       player.loadVideoById(pb.videoId, targetSeconds);
@@ -760,14 +838,9 @@ function PlayerCard({
     const clampedVolume = Math.max(0, Math.min(100, Math.round(nextVolume)));
     setVolume(clampedVolume);
     if (!playerRef.current) return;
-    playerRef.current.setVolume(clampedVolume);
-    if (clampedVolume === 0) {
-      playerRef.current.mute();
-      setMuted(true);
-    } else {
-      playerRef.current.unMute();
-      setMuted(false);
-    }
+    const nextMuted = clampedVolume === 0;
+    applyPlayerAudioPreference(playerRef.current, { volume: clampedVolume, muted: nextMuted });
+    setMuted(nextMuted);
   };
 
   return (
@@ -1233,6 +1306,55 @@ function getStoredMember() {
   } catch {
     return null;
   }
+}
+
+function getStoredPlayerAudio(): PlayerAudioPreference {
+  try {
+    const raw = window.localStorage.getItem(playerAudioKey);
+    if (!raw) return { volume: 80, muted: false };
+
+    const preference = JSON.parse(raw) as Partial<PlayerAudioPreference>;
+    return {
+      volume: clampVolume(preference.volume),
+      muted: Boolean(preference.muted)
+    };
+  } catch {
+    return { volume: 80, muted: false };
+  }
+}
+
+function storePlayerAudio(preference: PlayerAudioPreference) {
+  try {
+    window.localStorage.setItem(
+      playerAudioKey,
+      JSON.stringify({
+        volume: clampVolume(preference.volume),
+        muted: preference.muted
+      })
+    );
+  } catch {
+    // Local storage can be disabled in private browsing or strict site settings.
+  }
+}
+
+function applyPlayerAudioPreference(player: PlayerApi, preference: PlayerAudioPreference) {
+  const volume = clampVolume(preference.volume);
+
+  if (typeof player.setVolume === "function") {
+    player.setVolume(volume);
+  }
+
+  if (preference.muted || volume === 0) {
+    player.mute();
+  } else {
+    player.unMute();
+  }
+}
+
+function clampVolume(value: unknown) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return 80;
+  return Math.max(0, Math.min(100, Math.round(numericValue)));
 }
 
 function makeRoomId() {

@@ -258,9 +258,14 @@ wss.on("connection", (socket) => {
     if (message.type === "chat:send") {
       const text = String(message.text || "").trim().slice(0, 500);
       if (!text) return;
-      console.log(`[chat:send] ${actor.nickname}: "${text}" → room ${roomId} (${room.activity.length} items before)`);
       addChat(room, actor, text);
-      console.log(`[chat:send] activity now has ${room.activity.length} items, first kind=${room.activity[0]?.kind}`);
+      broadcastRoom(roomId);
+    }
+
+    if (message.type === "room:rename") {
+      const name = String(message.name || "").trim().slice(0, 60);
+      room.name = name || "";
+      addActivity(room, name ? `renamed the room to "${name}"` : "cleared the room name", actor);
       broadcastRoom(roomId);
     }
   });
@@ -268,11 +273,8 @@ wss.on("connection", (socket) => {
   socket.on("close", () => {
     const room = rooms.get(roomId);
     if (!room || !memberId) return;
-    const member = room.members.get(memberId);
-    if (member) {
-      member.online = false;
-      broadcastRoom(roomId);
-    }
+    room.members.delete(memberId);
+    broadcastRoom(roomId);
   });
 });
 
@@ -303,6 +305,7 @@ function getRoom(roomId) {
   if (!rooms.has(roomId)) {
     rooms.set(roomId, {
       id: roomId,
+      name: "",
       members: new Map(),
       queue: [],
       activity: [],
@@ -320,6 +323,7 @@ function broadcastRoom(roomId) {
     type: "room:state",
     state: {
       id: room.id,
+      name: room.name || "",
       members: [...room.members.values()],
       queue: room.queue,
       activity: room.activity,
