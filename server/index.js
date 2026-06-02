@@ -142,10 +142,12 @@ wss.on("connection", (socket) => {
       roomId = message.roomId;
       memberId = message.member.id;
       const room = getRoom(roomId);
+      const existingMember = room.members.get(memberId);
+      const action = existingMember && !existingMember.online ? "rejoined the room" : "joined the room";
       room.members.set(memberId, { ...message.member, online: true });
       socket.roomId = roomId;
       socket.memberId = memberId;
-      addActivity(room, `${message.member.nickname} joined the room`);
+      addActivity(room, action, message.member);
       broadcastRoom(roomId);
       return;
     }
@@ -165,9 +167,9 @@ wss.on("connection", (socket) => {
       };
       room.queue.push(item);
       if (!room.playback.videoId) {
-          room.playback = playbackFor(item.videoId, "paused", 0, actor.nickname, room.playback.playbackRate);
+        room.playback = playbackFor(item.videoId, "paused", 0, actor.nickname, room.playback.playbackRate);
       }
-      addActivity(room, `${actor.nickname} added "${item.title}"`);
+      addActivity(room, `added "${item.title}"`, actor);
       broadcastRoom(roomId);
     }
 
@@ -175,7 +177,7 @@ wss.on("connection", (socket) => {
       const index = room.queue.findIndex((item) => item.id === message.itemId);
       if (index >= 0) {
         const [removed] = room.queue.splice(index, 1);
-        addActivity(room, `${actor.nickname} removed "${removed.title}"`);
+        addActivity(room, `removed "${removed.title}"`, actor);
         if (room.playback.videoId === removed.videoId) {
           const next = room.queue[0];
           room.playback = next
@@ -192,7 +194,7 @@ wss.on("connection", (socket) => {
       if (from >= 0 && from !== to) {
         const [item] = room.queue.splice(from, 1);
         room.queue.splice(to, 0, item);
-        addActivity(room, `${actor.nickname} moved "${item.title}" to position ${to + 1}`);
+        addActivity(room, `moved "${item.title}" to position ${to + 1}`, actor);
         broadcastRoom(roomId);
       }
     }
@@ -203,7 +205,26 @@ wss.on("connection", (socket) => {
       room.playback = next
         ? playbackFor(next.videoId, "playing", 0, actor.nickname, room.playback.playbackRate)
         : playbackFor("", "paused", 0, actor.nickname, room.playback.playbackRate);
-      addActivity(room, `${actor.nickname} skipped to the next video`);
+      addActivity(room, "skipped to the next video", actor);
+      broadcastRoom(roomId);
+    }
+
+    if (message.type === "queue:ended") {
+      const currentIndex = room.queue.findIndex((item) => item.videoId === room.playback.videoId);
+      const current = room.queue[currentIndex];
+      let next = null;
+
+      if (room.repeatMode === "one") {
+        next = current;
+      } else if (currentIndex >= 0 && currentIndex < room.queue.length - 1) {
+        next = room.queue[currentIndex + 1];
+      } else if (room.repeatMode === "playlist") {
+        next = room.queue[0];
+      }
+
+      room.playback = next
+        ? playbackFor(next.videoId, "playing", 0, actor.nickname, room.playback.playbackRate)
+        : playbackFor(room.playback.videoId, "paused", 0, actor.nickname, room.playback.playbackRate);
       broadcastRoom(roomId);
     }
 
@@ -211,7 +232,7 @@ wss.on("connection", (socket) => {
       const nextRate = clamp(Number(message.playbackRate || room.playback.playbackRate || 1), 0.25, 2);
       room.playback = playbackFor(message.videoId, message.status, Number(message.positionSeconds || 0), actor.nickname, nextRate);
       const verb = message.status === "playing" ? "started playback" : "paused playback";
-      addActivity(room, `${actor.nickname} ${verb}`);
+      addActivity(room, verb, actor);
       broadcastRoom(roomId);
     }
 
@@ -224,7 +245,7 @@ wss.on("connection", (socket) => {
         actor.nickname,
         room.playback.playbackRate
       );
-      addActivity(room, `${actor.nickname} jumped to ${formatDuration(positionSeconds)}`);
+      addActivity(room, `jumped to ${formatDuration(positionSeconds)}`, actor);
       broadcastRoom(roomId);
     }
 
@@ -232,7 +253,20 @@ wss.on("connection", (socket) => {
       const playbackRate = clamp(Number(message.playbackRate || 1), 0.25, 2);
       const positionSeconds = Number(message.positionSeconds || room.playback.positionSeconds || 0);
       room.playback = playbackFor(room.playback.videoId, room.playback.status, positionSeconds, actor.nickname, playbackRate);
-      addActivity(room, `${actor.nickname} changed speed to ${playbackRate}x`);
+      addActivity(room, `changed speed to ${playbackRate}x`, actor);
+      broadcastRoom(roomId);
+    }
+
+    if (message.type === "player:repeat") {
+      room.repeatMode = nextRepeatMode(room.repeatMode);
+      addActivity(room, `changed repeat to ${formatRepeatMode(room.repeatMode)}`, actor);
+      broadcastRoom(roomId);
+    }
+
+    if (message.type === "chat:send") {
+      const text = String(message.text || "").trim().slice(0, 500);
+      if (!text) return;
+      addChat(room, actor, text);
       broadcastRoom(roomId);
     }
   });
@@ -243,7 +277,6 @@ wss.on("connection", (socket) => {
     const member = room.members.get(memberId);
     if (member) {
       member.online = false;
-      addActivity(room, `${member.nickname} left the room`);
       broadcastRoom(roomId);
     }
   });
@@ -279,7 +312,8 @@ function getRoom(roomId) {
       members: new Map(),
       queue: [],
       activity: [],
-      playback: playbackFor("", "paused", 0, "system")
+      playback: playbackFor("", "paused", 0, "system"),
+      repeatMode: "off"
     });
   }
   return rooms.get(roomId);
@@ -296,7 +330,8 @@ function broadcastRoom(roomId) {
       members: [...room.members.values()],
       queue: room.queue,
       activity: room.activity,
-      playback: room.playback
+      playback: room.playback,
+      repeatMode: room.repeatMode
     }
   });
 
@@ -307,10 +342,24 @@ function broadcastRoom(roomId) {
   }
 }
 
-function addActivity(room, message) {
+function addActivity(room, message, actor) {
   room.activity.unshift({
     id: crypto.randomUUID(),
-    message,
+    kind: "activity",
+    actor: actor ? { id: actor.id, nickname: actor.nickname } : undefined,
+    message: actor ? `${actor.nickname} ${message}` : message,
+    createdAt: Date.now()
+  });
+  room.activity = room.activity.slice(0, 80);
+}
+
+function addChat(room, actor, text) {
+  room.activity.unshift({
+    id: crypto.randomUUID(),
+    kind: "chat",
+    actor: { id: actor.id, nickname: actor.nickname },
+    message: `${actor.nickname}: ${text}`,
+    text,
     createdAt: Date.now()
   });
   room.activity = room.activity.slice(0, 80);
@@ -334,6 +383,18 @@ function parseYouTubeId(input) {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function nextRepeatMode(current) {
+  if (current === "off") return "playlist";
+  if (current === "playlist") return "one";
+  return "off";
+}
+
+function formatRepeatMode(mode) {
+  if (mode === "playlist") return "repeat playlist";
+  if (mode === "one") return "repeat one";
+  return "no repeat";
 }
 
 function formatDuration(totalSeconds) {

@@ -6,17 +6,23 @@ import {
   ArrowUp,
   Clipboard,
   Headphones,
-  Link,
   ListMusic,
   LogIn,
+  MessageCircle,
   Pause,
   Play,
   Plus,
+  Repeat,
+  Repeat1,
   Search,
+  Send,
   Share2,
   SkipForward,
   Trash2,
   UsersRound,
+  Volume1,
+  Volume2,
+  VolumeX,
   Youtube
 } from "lucide-react";
 import "./styles.css";
@@ -47,7 +53,16 @@ type ActivityItem = {
   id: string;
   message: string;
   createdAt: number;
+  kind?: "activity" | "chat";
+  actor?: {
+    id: string;
+    nickname: string;
+  };
+  text?: string;
 };
+
+type QueueTab = "queue" | "history";
+type RepeatMode = "off" | "playlist" | "one";
 
 type PlaybackState = {
   videoId: string;
@@ -64,6 +79,7 @@ type RoomState = {
   queue: QueueItem[];
   activity: ActivityItem[];
   playback: PlaybackState;
+  repeatMode: RepeatMode;
 };
 
 type PlayerApi = {
@@ -76,6 +92,11 @@ type PlayerApi = {
   loadVideoById: (videoId: string, startSeconds?: number) => void;
   cueVideoById: (videoId: string, startSeconds?: number) => void;
   setPlaybackRate: (suggestedRate: number) => void;
+  getVolume: () => number;
+  setVolume: (volume: number) => void;
+  isMuted: () => boolean;
+  mute: () => void;
+  unMute: () => void;
 };
 
 declare global {
@@ -297,8 +318,10 @@ function Room({
   onResetNickname: () => void;
 }) {
   const [copied, setCopied] = React.useState(false);
+  const playFromQueueRef = React.useRef<((videoId: string) => void) | null>(null);
   const queue = roomState?.queue ?? [];
   const playback = roomState?.playback;
+  const repeatMode = roomState?.repeatMode ?? "off";
   const nowPlaying = queue.find((item) => item.videoId === playback?.videoId) ?? queue[0];
 
   const send = React.useCallback(
@@ -308,6 +331,26 @@ function Room({
       }
     },
     [socket]
+  );
+  const registerQueuePlay = React.useCallback((handler: ((videoId: string) => void) | null) => {
+    playFromQueueRef.current = handler;
+  }, []);
+  const playQueueItem = React.useCallback(
+    (item: QueueItem) => {
+      if (playFromQueueRef.current) {
+        playFromQueueRef.current(item.videoId);
+        return;
+      }
+
+      send({
+        type: "player:update",
+        videoId: item.videoId,
+        status: "playing",
+        positionSeconds: 0,
+        playbackRate: playback?.playbackRate ?? 1
+      });
+    },
+    [playback?.playbackRate, send]
   );
 
   const inviteUrl = `${window.location.origin}/room/${roomId}`;
@@ -344,10 +387,16 @@ function Room({
       {connectionIssue ? <div className="connectionBanner">{connectionIssue}</div> : null}
 
       <section className="stage">
-        <PlayerCard playback={playback} nowPlaying={nowPlaying} onSend={send} />
+        <PlayerCard
+          playback={playback}
+          nowPlaying={nowPlaying}
+          onRegisterQueuePlay={registerQueuePlay}
+          onSend={send}
+          repeatMode={repeatMode}
+        />
         <aside className="sideRail">
           <Members members={roomState?.members ?? [member]} />
-          <ActivityLog activity={roomState?.activity ?? []} />
+          <ActivityLog activity={roomState?.activity ?? []} member={member} onSend={send} />
         </aside>
       </section>
 
@@ -361,7 +410,13 @@ function Room({
         </div>
         <div className="workspaceGrid">
           <YouTubeSearch onAdd={(item) => send({ type: "queue:add", item })} />
-          <QueuePanel queue={queue} playback={playback} onSend={send} />
+          <QueuePanel
+            activity={roomState?.activity ?? []}
+            queue={queue}
+            playback={playback}
+            onPlayItem={playQueueItem}
+            onSend={send}
+          />
         </div>
       </section>
     </main>
@@ -371,11 +426,15 @@ function Room({
 function PlayerCard({
   playback,
   nowPlaying,
-  onSend
+  onRegisterQueuePlay,
+  onSend,
+  repeatMode
 }: {
   playback?: PlaybackState;
   nowPlaying?: QueueItem;
+  onRegisterQueuePlay: (handler: ((videoId: string) => void) | null) => void;
   onSend: (message: Record<string, unknown>) => void;
+  repeatMode: RepeatMode;
 }) {
   const playerRef = React.useRef<PlayerApi | null>(null);
   const playbackRef = React.useRef<PlaybackState | undefined>(playback);
@@ -390,6 +449,8 @@ function PlayerCard({
   const [durationSeconds, setDurationSeconds] = React.useState(0);
   const [progressSeconds, setProgressSeconds] = React.useState(0);
   const [isSeeking, setIsSeeking] = React.useState(false);
+  const [volume, setVolume] = React.useState(80);
+  const [muted, setMuted] = React.useState(false);
   // True when the room is playing but we can't autoplay without a user tap.
   const [needsUserGesture, setNeedsUserGesture] = React.useState(false);
 
@@ -451,12 +512,18 @@ function PlayerCard({
       events: {
         onReady: (event) => {
           playerRef.current = event.target;
+          if (typeof event.target.getVolume === "function") {
+            setVolume(event.target.getVolume());
+          }
+          if (typeof event.target.isMuted === "function") {
+            setMuted(event.target.isMuted());
+          }
           setPlayerReady(true);
         },
         onStateChange: (event) => {
           if (!window.YT || !playbackRef.current?.videoId) return;
           if (event.data === window.YT.PlayerState.ENDED) {
-            onSend({ type: "queue:next" });
+            onSend({ type: "queue:ended" });
             return;
           }
 
@@ -598,6 +665,41 @@ function PlayerCard({
     }
     onSend({ type: "player:update", videoId, status: "playing", positionSeconds: position(), playbackRate });
   };
+  const playVideoById = React.useCallback(
+    (nextVideoId: string) => {
+      if (!isYouTubeVideoId(nextVideoId)) return;
+      hasInteractedRef.current = true;
+      setNeedsUserGesture(false);
+      desiredStatusRef.current = "playing";
+      const seconds = 0;
+      if (playerReady && playerRef.current) {
+        currentVideoRef.current = nextVideoId;
+        playerRef.current.setPlaybackRate(playbackRate);
+        playerRef.current.loadVideoById(nextVideoId, seconds);
+        if (muted) {
+          playerRef.current.mute();
+        } else {
+          playerRef.current.unMute();
+        }
+        playerRef.current.setVolume(volume);
+        playerRef.current.playVideo();
+      }
+      onSend({
+        type: "player:update",
+        videoId: nextVideoId,
+        status: "playing",
+        positionSeconds: seconds,
+        playbackRate
+      });
+    },
+    [muted, onSend, playbackRate, playerReady, volume]
+  );
+
+  React.useEffect(() => {
+    onRegisterQueuePlay(playVideoById);
+    return () => onRegisterQueuePlay(null);
+  }, [onRegisterQueuePlay, playVideoById]);
+
   const pause = () => {
     if (!hasValidVideoId) return;
     hasInteractedRef.current = true;
@@ -643,6 +745,33 @@ function PlayerCard({
     playerRef.current?.setPlaybackRate(rate);
     onSend({ type: "player:rate", playbackRate: rate, positionSeconds: seconds });
   };
+  const toggleMute = () => {
+    if (!playerRef.current) return;
+    if (muted) {
+      playerRef.current.unMute();
+      setMuted(false);
+      if (volume === 0) {
+        playerRef.current.setVolume(40);
+        setVolume(40);
+      }
+    } else {
+      playerRef.current.mute();
+      setMuted(true);
+    }
+  };
+  const changeVolume = (nextVolume: number) => {
+    const clampedVolume = Math.max(0, Math.min(100, Math.round(nextVolume)));
+    setVolume(clampedVolume);
+    if (!playerRef.current) return;
+    playerRef.current.setVolume(clampedVolume);
+    if (clampedVolume === 0) {
+      playerRef.current.mute();
+      setMuted(true);
+    } else {
+      playerRef.current.unMute();
+      setMuted(false);
+    }
+  };
 
   return (
     <section className="playerCard">
@@ -670,6 +799,8 @@ function PlayerCard({
           durationSeconds={durationSeconds}
           isSeeking={isSeeking}
           onChangeSpeed={changeSpeed}
+          onChangeVolume={changeVolume}
+          onCycleRepeat={() => onSend({ type: "player:repeat" })}
           onPause={pause}
           onPlay={play}
           onProgressInput={(seconds) => {
@@ -678,10 +809,14 @@ function PlayerCard({
           }}
           onSeek={seek}
           onSkip={() => onSend({ type: "queue:next" })}
+          onToggleMute={toggleMute}
+          muted={muted}
           playback={playback}
           playbackRate={playbackRate}
           playerReady={playerReady}
           progressSeconds={progressSeconds}
+          repeatMode={repeatMode}
+          volume={volume}
           videoId={hasValidVideoId ? videoId : ""}
         />
       </div>
@@ -701,34 +836,47 @@ function EmptyPlayer() {
 function PlayerControls({
   durationSeconds,
   onChangeSpeed,
+  onChangeVolume,
+  onCycleRepeat,
   onPause,
   onPlay,
   onProgressInput,
   onSeek,
   onSkip,
+  onToggleMute,
+  muted,
   playback,
   playbackRate,
   playerReady,
   progressSeconds,
+  repeatMode,
+  volume,
   videoId
 }: {
   durationSeconds: number;
   isSeeking: boolean;
   onChangeSpeed: (rate: number) => void;
+  onChangeVolume: (volume: number) => void;
+  onCycleRepeat: () => void;
   onPause: () => void;
   onPlay: () => void;
   onProgressInput: (seconds: number) => void;
   onSeek: (seconds: number) => void;
   onSkip: () => void;
+  onToggleMute: () => void;
+  muted: boolean;
   playback?: PlaybackState;
   playbackRate: number;
   playerReady: boolean;
   progressSeconds: number;
+  repeatMode: RepeatMode;
+  volume: number;
   videoId: string;
 }) {
   const disabled = !videoId || !playerReady;
   const max = Math.max(1, Math.floor(durationSeconds || 1));
   const clampedProgress = Math.max(0, Math.min(progressSeconds, max));
+  const VolumeIcon = muted || volume === 0 ? VolumeX : volume < 50 ? Volume1 : Volume2;
 
   return (
     <div className="playerControls">
@@ -751,6 +899,41 @@ function PlayerControls({
         </button>
         <button className="iconButton" disabled={!videoId} onClick={onSkip} title="Next">
           <SkipForward size={18} />
+        </button>
+        <button
+          className={`iconButton ${muted ? "active" : ""}`}
+          disabled={disabled}
+          onClick={onToggleMute}
+          title={muted ? "Unmute" : "Mute"}
+        >
+          {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+        </button>
+        <div className="volumeControl">
+          <button className="iconButton" disabled={disabled} title={`Volume ${volume}%`}>
+            <VolumeIcon size={18} />
+          </button>
+          <div className="volumePopover">
+            <input
+              aria-label="Volume"
+              disabled={disabled}
+              max={100}
+              min={0}
+              step={1}
+              type="range"
+              value={volume}
+              onChange={(event) => onChangeVolume(Number(event.target.value))}
+              onInput={(event) => onChangeVolume(Number(event.currentTarget.value))}
+            />
+            <span>{volume}%</span>
+          </div>
+        </div>
+        <button
+          className={`iconButton ${repeatMode !== "off" ? "active" : ""}`}
+          disabled={!videoId}
+          onClick={onCycleRepeat}
+          title={repeatMode === "one" ? "Repeat one" : repeatMode === "playlist" ? "Repeat playlist" : "No repeat"}
+        >
+          {repeatMode === "one" ? <Repeat1 size={18} /> : <Repeat size={18} />}
         </button>
         <label className="speedControl">
           <span>Speed</span>
@@ -845,60 +1028,87 @@ function YouTubeSearch({ onAdd }: { onAdd: (item: VideoSearchResult) => void }) 
 }
 
 function QueuePanel({
+  activity,
   queue,
   playback,
+  onPlayItem,
   onSend
 }: {
+  activity: ActivityItem[];
   queue: QueueItem[];
   playback?: PlaybackState;
+  onPlayItem: (item: QueueItem) => void;
   onSend: (message: Record<string, unknown>) => void;
 }) {
+  const [activeTab, setActiveTab] = React.useState<QueueTab>("queue");
+  const history = activity.filter((item) => item.kind !== "chat" && !isLeaveActivity(item));
+
   return (
     <section className="panel queuePanel">
       <div className="panelHeader">
         <div>
           <p className="eyebrow">Shared playlist</p>
-          <h2>Queue</h2>
+          <div className="queueTabs">
+            <button className={`tabButton ${activeTab === "queue" ? "active" : ""}`} onClick={() => setActiveTab("queue")}>
+              Queue
+            </button>
+            <button className={`tabButton ${activeTab === "history" ? "active" : ""}`} onClick={() => setActiveTab("history")}>
+              History
+            </button>
+          </div>
         </div>
         <ListMusic size={22} />
       </div>
-      <div className="queueList">
-        {queue.length === 0 ? (
-          <p className="emptyText">No videos yet.</p>
-        ) : (
-          queue.map((item, index) => (
-            <article className={`queueItem ${playback?.videoId === item.videoId ? "playing" : ""}`} key={item.id}>
-              <span className="queueIndex">{index + 1}</span>
-              <img alt="" src={item.thumbnail} />
-              <div className="queueText">
-                <h3>{decodeHtml(item.title)}</h3>
-                <p>Added by {item.addedBy.nickname}</p>
-              </div>
-              <div className="queueActions">
-                <button
-                  className="miniButton"
-                  disabled={index === 0}
-                  onClick={() => onSend({ type: "queue:reorder", itemId: item.id, toIndex: index - 1 })}
-                  title="Move up"
-                >
-                  <ArrowUp size={15} />
+      {activeTab === "queue" ? (
+        <div className="queueList">
+          {queue.length === 0 ? (
+            <p className="emptyText">No videos yet.</p>
+          ) : (
+            queue.map((item, index) => (
+              <article className={`queueItem ${playback?.videoId === item.videoId ? "playing" : ""}`} key={item.id}>
+                <span className="queueIndex">{index + 1}</span>
+                <button className="queueThumb" onClick={() => onPlayItem(item)} title="Play this video">
+                  <img alt="" src={item.thumbnail} />
+                  <Play size={16} />
                 </button>
-                <button
-                  className="miniButton"
-                  disabled={index === queue.length - 1}
-                  onClick={() => onSend({ type: "queue:reorder", itemId: item.id, toIndex: index + 1 })}
-                  title="Move down"
-                >
-                  <ArrowDown size={15} />
-                </button>
-                <button className="miniButton danger" onClick={() => onSend({ type: "queue:remove", itemId: item.id })} title="Remove">
-                  <Trash2 size={15} />
-                </button>
-              </div>
-            </article>
-          ))
-        )}
-      </div>
+                <div className="queueText">
+                  <h3>{decodeHtml(item.title)}</h3>
+                  <p>Added by {item.addedBy.nickname}</p>
+                </div>
+                <div className="queueActions">
+                  <button
+                    className="miniButton"
+                    disabled={index === 0}
+                    onClick={() => onSend({ type: "queue:reorder", itemId: item.id, toIndex: index - 1 })}
+                    title="Move up"
+                  >
+                    <ArrowUp size={15} />
+                  </button>
+                  <button
+                    className="miniButton"
+                    disabled={index === queue.length - 1}
+                    onClick={() => onSend({ type: "queue:reorder", itemId: item.id, toIndex: index + 1 })}
+                    title="Move down"
+                  >
+                    <ArrowDown size={15} />
+                  </button>
+                  <button className="miniButton danger" onClick={() => onSend({ type: "queue:remove", itemId: item.id })} title="Remove">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </article>
+            ))
+          )}
+        </div>
+      ) : (
+        <div className="historyList">
+          {history.length === 0 ? (
+            <p className="emptyText">No queue history yet.</p>
+          ) : (
+            history.map((item) => <ActivityLine item={item} key={item.id} />)
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -921,7 +1131,25 @@ function Members({ members }: { members: Member[] }) {
   );
 }
 
-function ActivityLog({ activity }: { activity: ActivityItem[] }) {
+function ActivityLog({
+  activity,
+  member,
+  onSend
+}: {
+  activity: ActivityItem[];
+  member: Member;
+  onSend: (message: Record<string, unknown>) => void;
+}) {
+  const [message, setMessage] = React.useState("");
+  const visibleActivity = activity.filter((item) => !isLeaveActivity(item));
+  const sendChat = (event: React.FormEvent) => {
+    event.preventDefault();
+    const text = message.trim();
+    if (!text) return;
+    onSend({ type: "chat:send", text });
+    setMessage("");
+  };
+
   return (
     <section className="railPanel activityPanel">
       <div className="railTitle">
@@ -929,18 +1157,39 @@ function ActivityLog({ activity }: { activity: ActivityItem[] }) {
         Activity
       </div>
       <div className="activityList">
-        {activity.length === 0 ? (
+        {visibleActivity.length === 0 ? (
           <p className="emptyText">Room actions will appear here.</p>
         ) : (
-          activity.map((item) => (
-            <p key={item.id}>
-              <span>{formatTime(item.createdAt)}</span>
-              {item.message}
-            </p>
-          ))
+          visibleActivity.map((item) => <ActivityLine item={item} key={item.id} />)
         )}
       </div>
+      <form className="chatForm" onSubmit={sendChat}>
+        <MessageCircle size={17} />
+        <input
+          aria-label="Chat message"
+          maxLength={500}
+          placeholder={`Message as ${member.nickname}`}
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+        />
+        <button className="miniButton" disabled={!message.trim()} title="Send message" type="submit">
+          <Send size={15} />
+        </button>
+      </form>
     </section>
+  );
+}
+
+function ActivityLine({ item }: { item: ActivityItem }) {
+  const actor = item.actor?.nickname || getActivityActor(item.message);
+  const detail = item.kind === "chat" ? item.text || item.message : getActivityDetail(item.message, actor);
+
+  return (
+    <p className={`activityLine ${item.kind === "chat" ? "chatMessage" : ""}`}>
+      <span className="activityTime">{formatTime(item.createdAt)}</span>
+      {actor ? <strong className="activityActor">{actor}</strong> : null}
+      <span className="activityText">{detail}</span>
+    </p>
   );
 }
 
@@ -974,6 +1223,20 @@ function formatDuration(totalSeconds: number) {
   const seconds = Math.floor(totalSeconds % 60);
   const minutes = Math.floor(totalSeconds / 60);
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function isLeaveActivity(item: ActivityItem) {
+  return /\bleft the room\b/i.test(item.message);
+}
+
+function getActivityActor(message: string) {
+  const match = message.match(/^(.+?)\s(joined|rejoined|added|removed|moved|skipped|started|paused|jumped|changed)\b/i);
+  return match?.[1] ?? "";
+}
+
+function getActivityDetail(message: string, actor: string) {
+  if (!actor) return message;
+  return message.slice(actor.length).trim();
 }
 
 function isYouTubeVideoId(value: string) {

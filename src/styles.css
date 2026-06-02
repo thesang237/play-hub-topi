@@ -389,7 +389,55 @@ p {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
+}
+
+.volumeControl {
+  position: relative;
+  display: inline-grid;
+}
+
+.volumePopover {
+  position: absolute;
+  right: 50%;
+  bottom: calc(100% + 10px);
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  width: 54px;
+  padding: 12px 8px 10px;
+  border: 1px solid rgba(245, 241, 232, 0.18);
+  background: rgba(12, 14, 13, 0.96);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(50%, 6px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.volumeControl:hover .volumePopover,
+.volumeControl:focus-within .volumePopover {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(50%, 0);
+}
+
+.volumePopover input[type="range"] {
+  width: 112px;
+  height: 28px;
+  accent-color: var(--accent);
+  transform: rotate(-90deg);
+  transform-origin: center;
+}
+
+.volumePopover span {
+  margin-top: 34px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
 }
 
 .speedControl {
@@ -478,6 +526,8 @@ p {
 }
 
 .activityPanel {
+  display: flex;
+  flex-direction: column;
   min-height: 260px;
   overflow: hidden;
 }
@@ -487,20 +537,74 @@ p {
   gap: 11px;
   max-height: 390px;
   overflow: auto;
+  padding-right: 2px;
 }
 
-.activityList p {
+.activityLine {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
   margin: 0;
   color: var(--muted);
   font-size: 0.9rem;
   line-height: 1.45;
 }
 
-.activityList span {
-  display: inline-block;
-  min-width: 58px;
+.activityTime {
+  flex: 0 0 54px;
+  color: rgba(167, 170, 157, 0.58);
+  font-size: 0.76rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.activityActor {
+  flex: 0 0 auto;
   color: var(--accent-2);
-  font-weight: 800;
+  font-weight: 900;
+}
+
+.activityText {
+  min-width: 0;
+  color: var(--muted);
+}
+
+.chatMessage {
+  align-items: flex-start;
+  border-left: 2px solid rgba(111, 209, 182, 0.45);
+  padding: 7px 0 7px 10px;
+  background: linear-gradient(90deg, rgba(111, 209, 182, 0.08), transparent 72%);
+}
+
+.chatMessage .activityText {
+  color: var(--ink);
+}
+
+.chatForm {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 14px;
+}
+
+.chatForm input {
+  min-width: 0;
+  height: 40px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--ink);
+  outline: none;
+  padding: 0 10px;
+}
+
+.chatForm input:focus {
+  border-color: rgba(111, 209, 182, 0.42);
+}
+
+.chatForm svg {
+  color: var(--muted);
 }
 
 .workspace {
@@ -516,10 +620,17 @@ p {
 .tabButton.active {
   background: var(--panel-strong);
   color: var(--accent);
+  opacity: 1;
 }
 
+.tabButton:not(.active),
 .tabButton.disabled {
   color: var(--muted);
+  opacity: 0.54;
+}
+
+.tabButton:not(.active):hover {
+  opacity: 0.82;
 }
 
 .workspaceGrid {
@@ -532,6 +643,17 @@ p {
   justify-content: space-between;
   gap: 14px;
   margin-bottom: 16px;
+}
+
+.queueTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.queueTabs .tabButton {
+  min-height: 38px;
+  padding: 0 13px;
 }
 
 .searchForm {
@@ -607,6 +729,44 @@ p {
   padding: 9px;
 }
 
+.queueThumb {
+  position: relative;
+  display: grid;
+  width: 84px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid transparent;
+  background: #080908;
+  color: var(--accent);
+}
+
+.queueThumb img,
+.queueThumb svg {
+  grid-area: 1 / 1;
+}
+
+.queueThumb svg {
+  place-self: center;
+  width: 30px;
+  height: 30px;
+  padding: 7px;
+  border: 1px solid rgba(241, 200, 75, 0.45);
+  background: rgba(10, 12, 11, 0.72);
+  opacity: 0;
+  transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+.queueThumb:hover,
+.queueThumb:focus-visible {
+  border-color: rgba(241, 200, 75, 0.5);
+}
+
+.queueThumb:hover svg,
+.queueThumb:focus-visible svg {
+  opacity: 1;
+  transform: scale(1.04);
+}
+
 .queueItem.playing {
   border-color: rgba(241, 200, 75, 0.48);
   background: rgba(241, 200, 75, 0.08);
@@ -620,6 +780,13 @@ p {
 
 .queueActions {
   gap: 6px;
+}
+
+.historyList {
+  display: grid;
+  gap: 12px;
+  max-height: 420px;
+  overflow: auto;
 }
 
 @media (max-width: 980px) {
@@ -671,6 +838,10 @@ p {
 
   .queueItem {
     grid-template-columns: 24px 68px minmax(0, 1fr);
+  }
+
+  .queueThumb {
+    width: 68px;
   }
 
   .queueActions {

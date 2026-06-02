@@ -4,8 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Play Hub</title>
-    <script type="module" crossorigin src="/assets/index-BHi1ojTd.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-dFDpvbC2.css">
+  <!-- Start fetching the YouTube IFrame API as early as possible so the player
+       is ready sooner after React mounts. These hints don't execute the script,
+       they just warm up the connection and pre-fetch the resource. -->
+  <link rel="preconnect" href="https://www.youtube.com" />
+  <link rel="preconnect" href="https://www.youtube-nocookie.com" />
+  <link rel="preload" href="https://www.youtube.com/iframe_api" as="script" />
+    <script type="module" crossorigin src="/assets/index-BFdVRzAa.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Dk3F68pl.css">
   </head>
   <body>
     <div id="root"></div>
