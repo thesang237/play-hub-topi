@@ -189,7 +189,7 @@ function App() {
     return () => ws.close();
     // reconnectKey is intentionally included so that a bfcache restore
     // (pageshow with persisted=true) creates a fresh WebSocket.
-  }, [roomId, member, reconnectKey]);
+  }, [roomId, member?.id, reconnectKey]);
 
   const createRoom = () => {
     const nextRoomId = makeRoomId();
@@ -215,12 +215,19 @@ function App() {
     setMember(nextMember);
   };
 
-  const resetNickname = () => {
-    window.localStorage.removeItem(memberKey);
-    setRoomState(null);
-    setMember(null);
-    setConnection("idle");
-    socket?.close();
+  const renameMember = () => {
+    if (!member) return;
+
+    const nickname = window.prompt("Change nickname", member.nickname)?.trim().slice(0, 28);
+    if (!nickname || nickname === member.nickname) return;
+
+    const nextMember = { ...member, nickname, online: true };
+    window.localStorage.setItem(memberKey, JSON.stringify(nextMember));
+    setMember(nextMember);
+
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "member:rename", nickname }));
+    }
   };
 
   if (!roomId) {
@@ -246,7 +253,7 @@ function App() {
       roomState={roomState}
       socket={socket}
       connectionIssue={connectionIssue}
-      onResetNickname={resetNickname}
+      onRenameMember={renameMember}
     />
   );
 }
@@ -378,7 +385,7 @@ function Room({
   roomState,
   socket,
   connectionIssue,
-  onResetNickname
+  onRenameMember
 }: {
   connection: "idle" | "connecting" | "online" | "offline";
   member: Member;
@@ -386,7 +393,7 @@ function Room({
   roomState: RoomState | null;
   socket: WebSocket | null;
   connectionIssue: string;
-  onResetNickname: () => void;
+  onRenameMember: () => void;
 }) {
   const [copied, setCopied] = React.useState(false);
   const playFromQueueRef = React.useRef<((videoId: string) => void) | null>(null);
@@ -452,7 +459,7 @@ function Room({
             {copied ? <Clipboard size={17} /> : <Share2 size={17} />}
             {copied ? "Copied" : "Invite"}
           </button>
-          <button className="ghostButton" onClick={onResetNickname} title="Change nickname">
+          <button className="ghostButton" onClick={onRenameMember} title="Change nickname">
             <UsersRound size={17} />
             {member.nickname}
           </button>

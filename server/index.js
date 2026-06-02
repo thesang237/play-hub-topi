@@ -262,6 +262,17 @@ wss.on("connection", (socket) => {
       broadcastRoom(roomId);
     }
 
+    if (message.type === "member:rename") {
+      const nickname = String(message.nickname || "").trim().slice(0, 28);
+      if (!nickname || nickname === actor.nickname) return;
+
+      const previousNickname = actor.nickname;
+      actor.nickname = nickname;
+      room.members.set(memberId, { ...actor, nickname, online: true });
+      addActivity(room, `changed nickname from "${previousNickname}" to "${nickname}"`, actor);
+      broadcastRoom(roomId);
+    }
+
     if (message.type === "room:rename") {
       const name = String(message.name || "").trim().slice(0, 60);
       room.name = name || "";
