@@ -302,6 +302,7 @@ p {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
   gap: 18px;
+  align-items: start;
 }
 
 .playerCard,
@@ -598,6 +599,7 @@ p {
   display: grid;
   gap: 18px;
   grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
 }
 
 .railPanel,
@@ -633,18 +635,25 @@ p {
   display: flex;
   flex-direction: column;
   min-height: 260px;
-  max-height: 480px;
+  height: min(480px, calc(100vh - 210px));
   overflow: hidden;
 }
 
 .activityList {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   flex: 1 1 0;
-  align-content: end;
   gap: 11px;
   min-height: 0;
   overflow-y: auto;
-  padding-right: 2px;
+  overscroll-behavior: contain;
+  padding-right: 6px;
+  scrollbar-gutter: stable;
+}
+
+.activityList::before {
+  content: "";
+  margin-top: auto;
 }
 
 .activityLine {
@@ -788,6 +797,10 @@ p {
 .queueList {
   display: grid;
   gap: 10px;
+  align-content: start;
+  max-height: 420px;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .resultList {
@@ -968,6 +981,10 @@ p {
     grid-template-columns: 1fr 1fr;
     grid-template-rows: auto;
   }
+
+  .activityPanel {
+    height: 360px;
+  }
 }
 
 @media (max-width: 680px) {
@@ -999,6 +1016,10 @@ p {
 
   .sideRail {
     grid-template-columns: 1fr;
+  }
+
+  .activityPanel {
+    height: min(420px, calc(100vh - 160px));
   }
 
   .videoResult {

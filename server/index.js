@@ -208,7 +208,15 @@ wss.on("connection", (socket) => {
 
     if (message.type === "queue:next") {
       const currentIndex = room.queue.findIndex((item) => item.videoId === room.playback.videoId);
-      const next = room.queue[currentIndex + 1] || room.queue[0];
+
+      let next;
+      if (currentIndex !== -1) {
+        room.queue.splice(currentIndex, 1);
+        next = room.queue[currentIndex] || room.queue[0];
+      } else {
+        next = room.queue[0];
+      }
+
       room.playback = next
         ? playbackFor(next.videoId, "playing", 0, actor.nickname, room.playback.playbackRate)
         : playbackFor("", "paused", 0, actor.nickname, room.playback.playbackRate);
@@ -218,11 +226,18 @@ wss.on("connection", (socket) => {
 
     if (message.type === "queue:ended") {
       const currentIndex = room.queue.findIndex((item) => item.videoId === room.playback.videoId);
-      const next = room.queue[currentIndex + 1] || room.queue[0];
+
+      let next;
+      if (currentIndex !== -1) {
+        room.queue.splice(currentIndex, 1);
+        next = room.queue[currentIndex] || room.queue[0];
+      } else {
+        next = room.queue[0];
+      }
 
       room.playback = next
         ? playbackFor(next.videoId, "playing", 0, actor.nickname, room.playback.playbackRate)
-        : playbackFor(room.playback.videoId, "paused", 0, actor.nickname, room.playback.playbackRate);
+        : playbackFor("", "paused", 0, actor.nickname, room.playback.playbackRate);
       broadcastRoom(roomId);
     }
 
