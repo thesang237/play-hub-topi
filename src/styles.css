@@ -191,7 +191,15 @@ p {
   align-items: center;
 }
 
-.roomIdentity,
+.roomIdentity {
+  gap: 12px;
+  min-width: min(440px, 100%);
+}
+
+.roomIdentity > div:last-child {
+  min-width: 0;
+}
+
 .playerControls {
   display: grid;
   gap: 12px;
@@ -448,6 +456,16 @@ p {
   display: inline-grid;
 }
 
+.volumeControl::before {
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  width: 58px;
+  height: 12px;
+  content: "";
+  transform: translateX(-50%);
+}
+
 .volumePopover {
   position: absolute;
   right: 50%;
@@ -468,7 +486,8 @@ p {
   transition: opacity 0.16s ease, transform 0.16s ease;
 }
 
-.volumeControl:hover .volumePopover,.volumeControl:focus-within .volumePopover {
+.volumeControl:hover .volumePopover,
+.volumeControl:focus-within .volumePopover {
   opacity: 1;
   pointer-events: auto;
   transform: translate(50%, 0);

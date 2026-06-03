@@ -99,6 +99,10 @@ type PlayerApi = {
   setPlaybackRate: (suggestedRate: number) => void;
   getVolume: () => number;
   setVolume: (volume: number) => void;
+  getVideoData?: () => {
+    video_id?: string;
+    videoId?: string;
+  };
   isMuted: () => boolean;
   mute: () => void;
   unMute: () => void;
@@ -518,6 +522,7 @@ function PlayerCard({
   const playbackRef = React.useRef<PlaybackState | undefined>(playback);
   const desiredStatusRef = React.useRef<PlaybackState["status"]>(playback?.status ?? "paused");
   const lastAppliedRef = React.useRef("");
+  const endedSignalRef = React.useRef("");
   const currentVideoRef = React.useRef("");
   // True once the user has clicked Play, Pause, or "Sync & Play".
   // Chrome and Safari require a user gesture before any programmatic playback.
@@ -605,9 +610,21 @@ function PlayerCard({
           setPlayerReady(true);
         },
         onStateChange: (event) => {
-          if (!window.YT || !playbackRef.current?.videoId) return;
+          const currentPlayback = playbackRef.current;
+          if (!window.YT || !currentPlayback?.videoId) return;
           if (event.data === window.YT.PlayerState.ENDED) {
-            onSend({ type: "queue:ended" });
+            const endedVideoId = getPlayerVideoId(event.target) || currentVideoRef.current;
+            if (endedVideoId !== currentPlayback.videoId) return;
+
+            const endedSignature = `${currentPlayback.videoId}:${currentPlayback.updatedAt}`;
+            if (endedSignalRef.current === endedSignature) return;
+            endedSignalRef.current = endedSignature;
+
+            onSend({
+              type: "queue:ended",
+              videoId: currentPlayback.videoId,
+              playbackUpdatedAt: currentPlayback.updatedAt
+            });
             return;
           }
 
@@ -869,7 +886,7 @@ function PlayerCard({
       <div className="playerMeta">
         <div>
           <p className="eyebrow">Now playing</p>
-          <h2>{nowPlaying?.title ?? "Queue a video to begin"}</h2>
+          <h2>{nowPlaying ? decodeHtml(nowPlaying.title) : "Queue a video to begin"}</h2>
           <p>{nowPlaying ? `Added by ${nowPlaying.addedBy.nickname}` : "Search YouTube below or paste a link."}</p>
         </div>
         <PlayerControls
@@ -1413,6 +1430,15 @@ function getActivityDetail(message: string, actor: string) {
 
 function isYouTubeVideoId(value: string) {
   return /^[a-zA-Z0-9_-]{11}$/.test(value);
+}
+
+function getPlayerVideoId(player: PlayerApi) {
+  try {
+    const videoData = player.getVideoData?.();
+    return videoData?.video_id || videoData?.videoId || "";
+  } catch {
+    return "";
+  }
 }
 
 function decodeHtml(value: string) {

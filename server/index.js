@@ -225,6 +225,17 @@ wss.on("connection", (socket) => {
     }
 
     if (message.type === "queue:ended") {
+      const endedVideoId = typeof message.videoId === "string" ? message.videoId : "";
+      const endedPlaybackUpdatedAt = Number(message.playbackUpdatedAt);
+      if (!endedVideoId || endedVideoId !== room.playback.videoId) return;
+      if (
+        Number.isFinite(endedPlaybackUpdatedAt) &&
+        endedPlaybackUpdatedAt > 0 &&
+        endedPlaybackUpdatedAt !== room.playback.updatedAt
+      ) {
+        return;
+      }
+
       const currentIndex = room.queue.findIndex((item) => item.videoId === room.playback.videoId);
 
       let next;
