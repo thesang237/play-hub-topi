@@ -310,7 +310,7 @@ p {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
   gap: 18px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .playerCard,
@@ -618,6 +618,7 @@ p {
   display: grid;
   gap: 18px;
   grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
   min-height: 0;
 }
 
@@ -654,7 +655,7 @@ p {
   display: flex;
   flex-direction: column;
   min-height: 260px;
-  height: min(480px, calc(100vh - 210px));
+  height: auto;
   overflow: hidden;
 }
 
